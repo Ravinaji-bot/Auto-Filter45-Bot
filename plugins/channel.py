@@ -470,7 +470,7 @@ async def update_movie_message(bot, base_name):
                 )
             else:
                 await bot.edit_message_text(
-                    chat_id=MOVIE_UPDATE_CHANNEL,
+           chat_id=MOVIE_UPDATE_CHANNEL,
                     message_id=message_id,
                     text=text,
                     reply_markup=buttons,
@@ -638,7 +638,7 @@ def build_post_caption(movie_doc, base_name):
             groups[qlabel][key].append(f)
 
         for qlabel in sorted(groups.keys(), key=_quality_sort_key):
-            lines.append(f"✧ {qlabel} : ")
+            lines.append(f"✧  {qlabel} : ")
             season_eps = groups[qlabel]
             for (season, ep), flist in sorted(
                 season_eps.items(),
@@ -674,10 +674,13 @@ def build_post_caption(movie_doc, base_name):
             _, res_tokens = _split_quality(f.get("quality") or "N/A")
             qlabel = " ".join(res_tokens) if res_tokens else "Unknown"
             link = _file_link(f["file_id"])
-            lines.append(f"{qlabel} : <a href='{link}'>Click Hare</a>")
-        lines.append("")
+            size_str = f" ({get_size(f['file_size'])})" if f.get("file_size") else ""
+            lines.append(f"✧  {qlabel} : ")
+            lines.append(f"<a href='{link}'>Click Hare</a>{size_str}")
+            lines.append("")
 
     if MOVIE_POST_WATERMARK:
         lines.append(f"💢 ᴘᴏᴡᴇʀᴇᴅ ʙʏ : {MOVIE_POST_WATERMARK}")
 
-    return "\n".join(lines).strip()
+    caption = "\n".join(lines).strip()
+    return f"<b>{caption}</b>"
