@@ -463,12 +463,13 @@ async def update_movie_message(bot, base_name):
 
         try:
             if is_photo:
-                await bot.edit_message_caption(
+                await bot.edit_message_text(
                     chat_id=MOVIE_UPDATE_CHANNEL,
                     message_id=message_id,
-                    caption=text,
+                    text=text,
                     reply_markup=buttons,
-                    parse_mode=enums.ParseMode.HTML
+                    parse_mode=enums.ParseMode.HTML,
+                    link_preview_options=LinkPreviewOptions
                         )
                         is_photo = True
                     except Exception as e:
