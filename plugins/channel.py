@@ -375,8 +375,9 @@ async def send_movie_update(bot, base_name):
             if not movie_doc:
                 return None
 
-            text = build_post_caption(movie_doc, base_name)
-            buttons = None
+            fmt = await get_post_format(bot.me.id)
+            text = build_post_caption(movie_doc, base_name, fmt)
+            buttons = build_post_buttons(fmt)
             size=(2560, 1440) if LANDSCAPE_POSTER and TMDB_POSTER and movie_doc.get("is_backdrop") and not movie_doc.get("error_tmdb") else (853, 1280)
             if movie_doc.get("poster_url") and not LINK_PREVIEW:
                 resized_poster = await fetch_image(movie_doc["poster_url"], size)
@@ -449,8 +450,9 @@ async def update_movie_message(bot, base_name):
         if not movie_doc:
             return
 
-        text = build_post_caption(movie_doc, base_name)
-        buttons = None
+        fmt = await get_post_format(bot.me.id)
+        text = build_post_caption(movie_doc, base_name, fmt)
+        buttons = build_post_buttons(fmt)
 
         message_id = movie_doc.get("message_id")
         is_photo = movie_doc.get("is_photo", False)
@@ -465,12 +467,12 @@ async def update_movie_message(bot, base_name):
                     chat_id=MOVIE_UPDATE_CHANNEL,
                     message_id=message_id,
                     caption=text,
-                    reply_markup=buttons,
+                    reply_markup=buttons
                     parse_mode=enums.ParseMode.HTML
                 )
             else:
                 await bot.edit_message_text(
-           chat_id=MOVIE_UPDATE_CHANNEL,
+                    chat_id=MOVIE_UPDATE_CHANNEL,
                     message_id=message_id,
                     text=text,
                     reply_markup=buttons,
@@ -500,7 +502,41 @@ async def update_movie_message(bot, base_name):
     except Exception as e:
         logger.error(f"Failed to update movie message for {base_name}: {e}")
 
-POST_DIVIDER = "────•˚•── ✦ ──•˚•────"
+DEFAULT_POST_FORMAT = {
+    "bold": True,
+    "watermark": MOVIE_POST_WATERMARK,
+    "link_text": "Click Hare",
+    "divider": "────•˚•── ✦ ──•˚•────",
+    "title_emoji": "🎬",
+    "layout": "twoline",  # "twoline" = "✧ quality :\nlink (size)", "compact" = "quality : link"
+    "header_box": False,  # wraps the audio/genres/ott/quality lines in a Telegram quote-box
+    "button_text": "",    # optional inline button under the post, e.g. "📢 Join Channel"
+    "button_url": "",     # URL for that button; button is shown only if BOTH are set
+}
+
+_POST_FORMAT_KEYS = {
+    "bold": "POST_BOLD",
+    "watermark": "POST_WATERMARK",
+    "link_text": "POST_LINK_TEXT",
+    "divider": "POST_DIVIDER",
+    "title_emoji": "POST_TITLE_EMOJI",
+    "layout": "POST_LAYOUT",
+    "header_box": "POST_HEADER_BOX",
+    "button_text": "POST_BUTTON_TEXT",
+    "button_url": "POST_BUTTON_URL",
+}
+
+
+async def get_post_format(bot_id):
+    """Loads admin-customizable post-format settings (see plugins/post_format.py)
+    from the database, falling back to DEFAULT_POST_FORMAT for anything not set."""
+    fmt = dict(DEFAULT_POST_FORMAT)
+    try:
+        for key, db_key in _POST_FORMAT_KEYS.items():
+            fmt[key] = await db.get_bot_setting(bot_id, db_key, DEFAULT_POST_FORMAT[key])
+    except Exception:
+        logger.exception("Failed to load post format settings, using defaults")
+    return fmt
 
 
 class _FileRef:
@@ -573,11 +609,29 @@ def _group_link(file_ids) -> str:
     return f"https://t.me/{temp.U_NAME}?start=allfiles_0_{key}"
 
 
-def build_post_caption(movie_doc, base_name):
-    """Builds the final auto-post caption exactly in the requested layout:
-    header block (audio/genres/ott/quality) followed by a divider, then one
-    clickable line per quality (movies) or per quality+episode-range
-    (series), and a closing 'Powered by' line."""
+def build_post_buttons(fmt):
+    """Returns an InlineKeyboardMarkup with a single admin-configured button
+    (see /setbutton in plugins/post_format.py), or None if not configured."""
+    text = (fmt or {}).get("button_text") or ""
+    url = (fmt or {}).get("button_url") or ""
+    if text and url:
+        return InlineKeyboardMarkup([[InlineKeyboardButton(text, url=url)]])
+    return None
+
+
+def build_post_caption(movie_doc, base_name, fmt=None):
+    """Builds the final auto-post caption. `fmt` (see get_post_format / the
+    /postsettings admin command in plugins/post_format.py) controls bold,
+    watermark, link text, divider and layout without touching this code."""
+    fmt = fmt or DEFAULT_POST_FORMAT
+    divider = fmt.get("divider", DEFAULT_POST_FORMAT["divider"])
+    link_text = fmt.get("link_text", DEFAULT_POST_FORMAT["link_text"])
+    title_emoji = fmt.get("title_emoji", DEFAULT_POST_FORMAT["title_emoji"])
+    watermark = fmt.get("watermark", DEFAULT_POST_FORMAT["watermark"])
+    layout = fmt.get("layout", DEFAULT_POST_FORMAT["layout"])
+    bold = fmt.get("bold", DEFAULT_POST_FORMAT["bold"])
+    header_box = fmt.get("header_box", DEFAULT_POST_FORMAT["header_box"])
+
     files = movie_doc.get("files", [])
 
     all_languages, all_ott = set(), set()
@@ -606,6 +660,17 @@ def build_post_caption(movie_doc, base_name):
         source_tokens.update(src)
     quality_str = ", ".join(sorted(source_tokens)) if source_tokens else "N/A"
 
+    info_lines = [
+        f"🔊 ᴀᴜᴅɪᴏ  : {language_str}",
+        f"🎭 ɢᴇɴʀᴇs : {genres}",
+        f"🍿 ᴏᴛᴛ : {ott_str}",
+        f"🚀 ǫᴜᴀʟɪᴛʏ : {quality_str}",
+    ]
+    if header_box:
+        info_block = "<blockquote>" + "\n".join(info_lines) + "</blockquote>"
+    else:
+        info_block = "\n".join(info_lines)
+
     lines = []
 
     if is_series:
@@ -613,20 +678,13 @@ def build_post_caption(movie_doc, base_name):
         if len(seasons_present) == 1:
             season_num = next(iter(seasons_present))
             try:
-                header_title = f"🎬 {title} S{int(season_num):02d}{combined_tag}"
+                header_title = f"{title_emoji} {title} S{int(season_num):02d}{combined_tag}"
             except (TypeError, ValueError):
-                header_title = f"🎬 {title} S{season_num}{combined_tag}"
+                header_title = f"{title_emoji} {title} S{season_num}{combined_tag}"
         else:
-            header_title = f"🎬 {title}{combined_tag}"
+            header_title = f"{title_emoji} {title}{combined_tag}"
 
-        lines += [
-            header_title, POST_DIVIDER,
-            f"🔊 ᴀᴜᴅɪᴏ  : {language_str}",
-            f"🎭 ɢᴇɴʀᴇs : {genres}",
-            f"🍿 ᴏᴛᴛ : {ott_str}",
-            f"🚀 ǫᴜᴀʟɪᴛʏ : {quality_str}",
-            POST_DIVIDER, ""
-        ]
+        lines += [header_title, divider, info_block, divider, ""]
 
         groups = defaultdict(lambda: defaultdict(list))
         for f in files:
@@ -655,18 +713,11 @@ def build_post_caption(movie_doc, base_name):
                 link = _group_link(file_ids)
                 size_str = f" ({get_size(total_size)})" if total_size else ""
                 if link:
-                    lines.append(f"{ep_label} : <a href='{link}'>Click Hare</a>{size_str}")
+                    lines.append(f"{ep_label} : <a href='{link}'>{link_text}</a>{size_str}")
             lines.append("")
     else:
-        header_title = f"🎬 {title} {year_val}".strip()
-        lines += [
-            header_title, POST_DIVIDER,
-            f"🔊 ᴀᴜᴅɪᴏ  : {language_str}",
-            f"🎭 ɢᴇɴʀᴇs : {genres}",
-            f"🍿 ᴏᴛᴛ : {ott_str}",
-            f"🚀 ǫᴜᴀʟɪᴛʏ : {quality_str}",
-            POST_DIVIDER, ""
-        ]
+        header_title = f"{title_emoji} {title} {year_val}".strip()
+        lines += [header_title, divider, info_block, divider, ""]
 
         movie_files = [f for f in files if f.get("tag") != "#SERIES" and f.get("file_id")]
         movie_files.sort(key=lambda f: _quality_sort_key(f.get("quality") or ""))
@@ -675,12 +726,15 @@ def build_post_caption(movie_doc, base_name):
             qlabel = " ".join(res_tokens) if res_tokens else "Unknown"
             link = _file_link(f["file_id"])
             size_str = f" ({get_size(f['file_size'])})" if f.get("file_size") else ""
-            lines.append(f"✧  {qlabel} : ")
-            lines.append(f"<a href='{link}'>Click Hare</a>{size_str}")
-            lines.append("")
+            if layout == "compact":
+                lines.append(f"{qlabel} : <a href='{link}'>{link_text}</a>{size_str}")
+            else:
+                lines.append(f"✧  {qlabel} : ")
+                lines.append(f"<a href='{link}'>{link_text}</a>{size_str}")
+                lines.append("")
 
-    if MOVIE_POST_WATERMARK:
-        lines.append(f"💢 ᴘᴏᴡᴇʀᴇᴅ ʙʏ : {MOVIE_POST_WATERMARK}")
+    if watermark:
+        lines.append(f"💢 ᴘᴏᴡᴇʀᴇᴅ ʙʏ : {watermark}")
 
     caption = "\n".join(lines).strip()
-    return f"<b>{caption}</b>"
+    return f"<b>{caption}</b>" if bold else caption
